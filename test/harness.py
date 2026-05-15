@@ -131,8 +131,8 @@ def parse_metrics(lines):
 
     # Regex patterns for BME680 output
     metric_pattern = re.compile(
-        r'\[METRIC\]\s+read_ok=(\d+)\s+temp=([\d.]+)\s+hum=([\d.]+)\s+'
-        r'press=([\d.]+)\s+gas=(\d+)\s+gas_valid=(\d+)\s+ts_ms=(\d+)'
+        r'\[METRIC\]\s+read_ok=(\d+)\s+temp=(-?[\d.]+)\s+hum=(-?[\d.]+)\s+'
+        r'press=(-?[\d.]+)\s+gas=(-?\d+)\s+gas_valid=(\d+)\s+ts_ms=(\d+)'
     )
     fail_pattern = re.compile(
         r'\[METRIC\]\s+read_fail=(\d+)\s+err=(\w+)\s+ts_ms=(\d+)'
