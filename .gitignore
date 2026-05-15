@@ -1,0 +1,36 @@
+# Build directories
+build/
+cmake-build-*/
+*.elf
+*.hex
+*.bin
+*.uf2
+*.dis
+*.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+venv/
+.venv/
+
+# macOS
+.DS_Store
+._*
+
+# Logs
+*.log
+
+# Editor backup
+*~
+.*.swp
