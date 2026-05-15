@@ -36,6 +36,14 @@
 // Measurement interval (5 seconds for iteration 1)
 #define MEASURE_INTERVAL_MS     5000
 
+// IAQ baseline window: max gas resistance over the last N readings.
+// At 5 s interval, 60 readings = 5 minutes of warm-up before the
+// baseline is considered fully populated.
+#define IAQ_WINDOW_SIZE         60
+
+// Optimal humidity for IAQ scoring (centred on 40 %RH).
+#define IAQ_HUM_OPTIMAL         40.0f
+
 // Statistics tracking
 typedef struct {
     uint32_t total_reads;
@@ -48,12 +56,61 @@ typedef struct {
     float press_sq_sum;
     uint64_t gas_sum;
     uint64_t gas_sq_sum;
+    float iaq_sum;
+    float iaq_sq_sum;
+    uint32_t iaq_count;
     uint32_t first_valid_ms;
     bool first_valid_recorded;
 } stats_t;
 
 static stats_t stats = {0};
 static bme680_dev_t sensor;
+
+// Gas resistance ring buffer used to derive the IAQ baseline (running max).
+static uint32_t gas_history[IAQ_WINDOW_SIZE] = {0};
+static uint32_t gas_history_count = 0;
+static uint32_t gas_history_idx = 0;
+
+static void gas_history_push(uint32_t gas) {
+    gas_history[gas_history_idx] = gas;
+    gas_history_idx = (gas_history_idx + 1) % IAQ_WINDOW_SIZE;
+    if (gas_history_count < IAQ_WINDOW_SIZE) gas_history_count++;
+}
+
+static uint32_t gas_baseline_max(void) {
+    uint32_t max = 0;
+    for (uint32_t i = 0; i < gas_history_count; i++) {
+        if (gas_history[i] > max) max = gas_history[i];
+    }
+    return max;
+}
+
+// IAQ score: 0 (excellent) to 500 (hazardous).
+// Gas component is 75 % of the total air-quality score (mapped from
+// gas/baseline ratio), humidity component is 25 % (best at 40 %RH).
+static float compute_iaq(uint32_t gas_resistance, uint32_t baseline, float humidity) {
+    if (baseline == 0) return 0.0f;
+
+    float gas_ratio = (float)gas_resistance / (float)baseline;
+    if (gas_ratio > 1.0f) gas_ratio = 1.0f;
+    float gas_score = gas_ratio * 75.0f;
+
+    float hum_offset = humidity - IAQ_HUM_OPTIMAL;
+    float hum_score;
+    if (hum_offset >= 0.0f) {
+        hum_score = ((100.0f - IAQ_HUM_OPTIMAL - hum_offset) / (100.0f - IAQ_HUM_OPTIMAL)) * 25.0f;
+    } else {
+        hum_score = ((IAQ_HUM_OPTIMAL + hum_offset) / IAQ_HUM_OPTIMAL) * 25.0f;
+    }
+    if (hum_score < 0.0f) hum_score = 0.0f;
+    if (hum_score > 25.0f) hum_score = 25.0f;
+
+    float air_quality_score = gas_score + hum_score;
+    float iaq = (100.0f - air_quality_score) * 5.0f;
+    if (iaq < 0.0f) iaq = 0.0f;
+    if (iaq > 500.0f) iaq = 500.0f;
+    return iaq;
+}
 
 /**
  * @brief Initialize I2C peripheral
@@ -113,15 +170,24 @@ static void print_summary(void) {
     }
     float gas_stddev = (gas_variance > 0) ? sqrtf(gas_variance) : 0.0f;
 
+    float iaq_mean = (stats.iaq_count > 0) ? stats.iaq_sum / stats.iaq_count : 0.0f;
+    float iaq_stddev = 0.0f;
+    if (stats.iaq_count > 1) {
+        float iaq_variance = (stats.iaq_sq_sum / stats.iaq_count) - (iaq_mean * iaq_mean);
+        iaq_stddev = (iaq_variance > 0.0f) ? sqrtf(iaq_variance) : 0.0f;
+    }
+
     uint32_t uptime_s = to_ms_since_boot(get_absolute_time()) / 1000;
 
     printf("[SUMMARY] reads=%lu fails=%lu fail_rate=%.2f "
            "temp_mean=%.1f temp_stddev=%.1f hum_mean=%.1f hum_stddev=%.1f "
            "press_mean=%.0f press_stddev=%.1f gas_mean=%.0f gas_stddev=%.0f "
+           "iaq_mean=%.1f iaq_stddev=%.1f "
            "first_valid_ms=%lu uptime_s=%lu\n",
            stats.total_reads, stats.total_fails, fail_rate,
            temp_mean, temp_stddev, hum_mean, hum_stddev,
            press_mean, press_stddev, gas_mean, gas_stddev,
+           iaq_mean, iaq_stddev,
            stats.first_valid_ms, uptime_s);
 }
 
@@ -222,11 +288,26 @@ int main(void) {
             stats.gas_sum += data.gas_resistance;
             stats.gas_sq_sum += (uint64_t)data.gas_resistance * data.gas_resistance;
 
+            // Derive IAQ from gas baseline + humidity
+            float iaq = 0.0f;
+            uint32_t baseline = 0;
+            bool warming_up = true;
+            if (data.gas_valid) {
+                gas_history_push(data.gas_resistance);
+                baseline = gas_baseline_max();
+                iaq = compute_iaq(data.gas_resistance, baseline, data.humidity);
+                warming_up = (gas_history_count < IAQ_WINDOW_SIZE);
+                stats.iaq_sum += iaq;
+                stats.iaq_sq_sum += iaq * iaq;
+                stats.iaq_count++;
+            }
+
             // Print metric line
             printf("[METRIC] read_ok=1 temp=%.1f hum=%.1f press=%.0f gas=%lu "
-                   "gas_valid=%d ts_ms=%lu\n",
+                   "gas_valid=%d iaq=%.1f iaq_baseline=%lu warming_up=%d ts_ms=%lu\n",
                    data.temperature, data.humidity, data.pressure,
                    data.gas_resistance, data.gas_valid,
+                   iaq, baseline, warming_up ? 1 : 0,
                    to_ms_since_boot(get_absolute_time()));
         }
 
