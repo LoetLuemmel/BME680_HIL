@@ -38,3 +38,14 @@ pico_enable_stdio_usb(bme680_hil 0)
 
 # Create map/bin/hex/uf2 files
 pico_add_extra_outputs(bme680_hil)
+
+# Diagnostic: I2C address scanner (USB CDC stdio for direct readback)
+add_executable(i2c_scan tools/i2c_scan.c)
+target_link_libraries(i2c_scan
+    pico_stdlib
+    hardware_i2c
+    hardware_gpio
+)
+pico_enable_stdio_uart(i2c_scan 1)
+pico_enable_stdio_usb(i2c_scan 1)
+pico_add_extra_outputs(i2c_scan)
