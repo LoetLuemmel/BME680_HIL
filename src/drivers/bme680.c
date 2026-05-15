@@ -51,31 +51,32 @@ static bme680_error_t bme680_load_calibration(bme680_dev_t *dev) {
         return BME680_ERR_I2C;
     }
 
-    // Parse temperature calibration
-    dev->calib.par_t1 = (uint16_t)(coeff_buf2[8] << 8) | coeff_buf2[7];
-    dev->calib.par_t2 = (int16_t)(coeff_buf1[1] << 8) | coeff_buf1[0];
-    dev->calib.par_t3 = (int8_t)coeff_buf1[2];
+    // Parse temperature calibration (par_t1 at 0xE9/0xEA, par_t2 at 0x8A/0x8B,
+    // par_t3 at 0x8C — buf1 starts at 0x89 so register 0xXX is at buf1[0xXX-0x89])
+    dev->calib.par_t1 = (uint16_t)(coeff_buf2[9] << 8) | coeff_buf2[8];
+    dev->calib.par_t2 = (int16_t)(coeff_buf1[2] << 8) | coeff_buf1[1];
+    dev->calib.par_t3 = (int8_t)coeff_buf1[3];
 
     // Parse pressure calibration
-    dev->calib.par_p1 = (uint16_t)(coeff_buf1[5] << 8) | coeff_buf1[4];
-    dev->calib.par_p2 = (int16_t)(coeff_buf1[7] << 8) | coeff_buf1[6];
-    dev->calib.par_p3 = (int8_t)coeff_buf1[8];
-    dev->calib.par_p4 = (int16_t)(coeff_buf1[11] << 8) | coeff_buf1[10];
-    dev->calib.par_p5 = (int16_t)(coeff_buf1[13] << 8) | coeff_buf1[12];
-    dev->calib.par_p6 = (int8_t)coeff_buf1[15];
-    dev->calib.par_p7 = (int8_t)coeff_buf1[14];
-    dev->calib.par_p8 = (int16_t)(coeff_buf1[19] << 8) | coeff_buf1[18];
-    dev->calib.par_p9 = (int16_t)(coeff_buf1[21] << 8) | coeff_buf1[20];
-    dev->calib.par_p10 = (uint8_t)coeff_buf1[22];
+    dev->calib.par_p1 = (uint16_t)(coeff_buf1[6] << 8) | coeff_buf1[5];
+    dev->calib.par_p2 = (int16_t)(coeff_buf1[8] << 8) | coeff_buf1[7];
+    dev->calib.par_p3 = (int8_t)coeff_buf1[9];
+    dev->calib.par_p4 = (int16_t)(coeff_buf1[12] << 8) | coeff_buf1[11];
+    dev->calib.par_p5 = (int16_t)(coeff_buf1[14] << 8) | coeff_buf1[13];
+    dev->calib.par_p6 = (int8_t)coeff_buf1[16];
+    dev->calib.par_p7 = (int8_t)coeff_buf1[15];
+    dev->calib.par_p8 = (int16_t)(coeff_buf1[20] << 8) | coeff_buf1[19];
+    dev->calib.par_p9 = (int16_t)(coeff_buf1[22] << 8) | coeff_buf1[21];
+    dev->calib.par_p10 = (uint8_t)coeff_buf1[23];
 
-    // Parse humidity calibration
-    dev->calib.par_h1 = (uint16_t)(coeff_buf2[1] << 4) | (coeff_buf2[0] & 0x0F);
+    // Parse humidity calibration (par_h1 spans 0xE2/0xE3, par_h2 spans 0xE1/0xE2)
+    dev->calib.par_h1 = (uint16_t)(coeff_buf2[2] << 4) | (coeff_buf2[1] & 0x0F);
     dev->calib.par_h2 = (uint16_t)(coeff_buf2[0] << 4) | (coeff_buf2[1] >> 4);
-    dev->calib.par_h3 = (int8_t)coeff_buf2[2];
-    dev->calib.par_h4 = (int8_t)coeff_buf2[3];
-    dev->calib.par_h5 = (int8_t)coeff_buf2[4];
-    dev->calib.par_h6 = (uint8_t)coeff_buf2[5];
-    dev->calib.par_h7 = (int8_t)coeff_buf2[6];
+    dev->calib.par_h3 = (int8_t)coeff_buf2[3];
+    dev->calib.par_h4 = (int8_t)coeff_buf2[4];
+    dev->calib.par_h5 = (int8_t)coeff_buf2[5];
+    dev->calib.par_h6 = (uint8_t)coeff_buf2[6];
+    dev->calib.par_h7 = (int8_t)coeff_buf2[7];
 
     // Parse gas sensor calibration
     dev->calib.par_g1 = (int8_t)coeff_buf2[12];
