@@ -49,3 +49,14 @@ target_link_libraries(i2c_scan
 pico_enable_stdio_uart(i2c_scan 1)
 pico_enable_stdio_usb(i2c_scan 1)
 pico_add_extra_outputs(i2c_scan)
+
+# Diagnostic: BME680 calibration register dump
+add_executable(calib_dump tools/calib_dump.c)
+target_link_libraries(calib_dump
+    pico_stdlib
+    hardware_i2c
+    hardware_gpio
+)
+pico_enable_stdio_uart(calib_dump 1)
+pico_enable_stdio_usb(calib_dump 0)
+pico_add_extra_outputs(calib_dump)
