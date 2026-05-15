@@ -125,12 +125,20 @@ def parse_metrics(lines):
         "hum_values": [],
         "press_values": [],
         "gas_values": [],
+        "iaq_values": [],
         "errors": [],
         "first_valid_ms": None,
     }
 
-    # Regex patterns for BME680 output
+    # Regex patterns for BME680 output. iter-4 added iaq/iaq_baseline/warming_up
+    # fields between gas_valid and ts_ms; older firmware without those still
+    # parses via the fallback pattern below.
     metric_pattern = re.compile(
+        r'\[METRIC\]\s+read_ok=(\d+)\s+temp=(-?[\d.]+)\s+hum=(-?[\d.]+)\s+'
+        r'press=(-?[\d.]+)\s+gas=(-?\d+)\s+gas_valid=(\d+)\s+'
+        r'iaq=(-?[\d.]+)\s+iaq_baseline=(\d+)\s+warming_up=(\d+)\s+ts_ms=(\d+)'
+    )
+    metric_pattern_legacy = re.compile(
         r'\[METRIC\]\s+read_ok=(\d+)\s+temp=(-?[\d.]+)\s+hum=(-?[\d.]+)\s+'
         r'press=(-?[\d.]+)\s+gas=(-?\d+)\s+gas_valid=(\d+)\s+ts_ms=(\d+)'
     )
@@ -143,6 +151,28 @@ def parse_metrics(lines):
 
     for line in lines:
         match = metric_pattern.search(line)
+        if match:
+            metrics["reads"] += 1
+            temp = float(match.group(2))
+            hum = float(match.group(3))
+            press = float(match.group(4))
+            gas = int(match.group(5))
+            gas_valid = int(match.group(6))
+            iaq = float(match.group(7))
+            ts_ms = int(match.group(10))
+
+            metrics["temp_values"].append(temp)
+            metrics["hum_values"].append(hum)
+            metrics["press_values"].append(press)
+            if gas_valid:
+                metrics["gas_values"].append(gas)
+                metrics["iaq_values"].append(iaq)
+
+            if metrics["first_valid_ms"] is None and gas_valid:
+                metrics["first_valid_ms"] = ts_ms
+            continue
+
+        match = metric_pattern_legacy.search(line)
         if match:
             metrics["reads"] += 1
             temp = float(match.group(2))
@@ -187,6 +217,8 @@ def compute_statistics(metrics):
         "press_stddev": 0.0,
         "gas_mean": 0.0,
         "gas_stddev": 0.0,
+        "iaq_mean": 0.0,
+        "iaq_stddev": 0.0,
         "first_valid_ms": metrics["first_valid_ms"] or 0,
     }
 
@@ -226,6 +258,14 @@ def compute_statistics(metrics):
             variance = sum((x - stats["gas_mean"]) ** 2 for x in gas) / (len(gas) - 1)
             stats["gas_stddev"] = math.sqrt(variance)
 
+    # IAQ statistics (only present in iter-4+ firmware)
+    if metrics["iaq_values"]:
+        iaq = metrics["iaq_values"]
+        stats["iaq_mean"] = sum(iaq) / len(iaq)
+        if len(iaq) > 1:
+            variance = sum((x - stats["iaq_mean"]) ** 2 for x in iaq) / (len(iaq) - 1)
+            stats["iaq_stddev"] = math.sqrt(variance)
+
     return stats
 
 
@@ -260,6 +300,7 @@ def print_summary(stats):
     print(f"  Humidity:        {stats['hum_mean']:.1f} %RH (±{stats['hum_stddev']:.1f})")
     print(f"  Pressure:        {stats['press_mean']:.0f} hPa (±{stats['press_stddev']:.1f})")
     print(f"  Gas resistance:  {stats['gas_mean']:.0f} Ω (±{stats['gas_stddev']:.0f})")
+    print(f"  IAQ index:       {stats['iaq_mean']:.1f}    (±{stats['iaq_stddev']:.1f})")
     print(f"  First valid:     {stats['first_valid_ms']} ms")
     print("=" * 60)
 
