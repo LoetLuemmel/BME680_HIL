@@ -181,7 +181,7 @@ int main(void) {
             // Trigger forced mode measurement
             err = bme680_trigger_measurement(&sensor);
             if (err != BME680_OK) {
-                printf("[METRIC] read_fail=1 err=%s ts_ms=%llu\n",
+                printf("[METRIC] read_fail=1 err=%s ts_ms=%lu\n",
                        bme680_error_string(err),
                        to_ms_since_boot(get_absolute_time()));
                 stats.total_fails++;
@@ -198,7 +198,7 @@ int main(void) {
             gpio_put(LED_PIN, 0);
 
             if (err != BME680_OK) {
-                printf("[METRIC] read_fail=1 err=%s ts_ms=%llu\n",
+                printf("[METRIC] read_fail=1 err=%s ts_ms=%lu\n",
                        bme680_error_string(err),
                        to_ms_since_boot(get_absolute_time()));
                 stats.total_fails++;
@@ -224,7 +224,7 @@ int main(void) {
 
             // Print metric line
             printf("[METRIC] read_ok=1 temp=%.1f hum=%.1f press=%.0f gas=%lu "
-                   "gas_valid=%d ts_ms=%llu\n",
+                   "gas_valid=%d ts_ms=%lu\n",
                    data.temperature, data.humidity, data.pressure,
                    data.gas_resistance, data.gas_valid,
                    to_ms_since_boot(get_absolute_time()));
