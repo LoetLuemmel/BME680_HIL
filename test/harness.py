@@ -94,6 +94,16 @@ def capture_serial(port, baud, duration):
     try:
         with serial.Serial(port, baud, timeout=1) as ser:
             ser.reset_input_buffer()
+
+            # iter-5: inject wall-clock so the firmware can age-check its
+            # flash-persisted gas baseline (7-day freshness). Firmware ignores
+            # this line if it predates iter-5.
+            try:
+                ser.write(f"TIME {int(time.time())}\n".encode())
+                ser.flush()
+            except Exception as e:
+                print(f"[HARNESS] time injection failed: {e}")
+
             start_time = time.time()
 
             while time.time() - start_time < duration:
