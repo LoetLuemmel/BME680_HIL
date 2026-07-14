@@ -56,6 +56,11 @@
 // --- Iteration 5: persistent baseline ---
 // A restored baseline older than this is discarded and re-warmed.
 #define BASELINE_MAX_AGE_S          (7u * 24u * 3600u)   // 7 days
+// Reject an implausibly high stored baseline. The BME680 gas channel tops out
+// around ~2 MΩ in clean air; anything far above that is a saturated/frozen
+// reading (e.g. from the pre-heater-fix firmware), not a real baseline. This
+// self-heals a poisoned record: the firmware cold-starts and re-learns instead.
+#define BASELINE_MAX_PLAUSIBLE_OHMS 2000000u
 // Minimum gas samples before the running-max baseline is worth persisting.
 #define BASELINE_MIN_SAMPLES        10u
 // Don't rewrite flash if the baseline moved by less than this fraction (1/10).
@@ -164,6 +169,13 @@ static void seed_baseline_from_flash(void) {
     }
     if (rec.gas_baseline == 0) {
         printf("[BASELINE] stored baseline is zero; ignoring\n");
+        return;
+    }
+    if (rec.gas_baseline > BASELINE_MAX_PLAUSIBLE_OHMS) {
+        printf("[BASELINE] stored baseline %lu ohms implausible (>%lu); "
+               "discarding, cold start\n",
+               (unsigned long)rec.gas_baseline,
+               (unsigned long)BASELINE_MAX_PLAUSIBLE_OHMS);
         return;
     }
 
