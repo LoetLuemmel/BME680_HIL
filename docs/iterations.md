@@ -80,20 +80,39 @@ This file tracks the evolution of the BME680 firmware through each iteration.
 
 ---
 
-## Iteration 5: Baseline Calibration
+## Iteration 5: Baseline Calibration (Flash-persistent) — DONE
 
-**Goal**: Stable IAQ readings across power cycles
+**Goal**: IAQ baseline survives power cycles instead of re-warming from scratch.
 
-**Planned Changes**:
-- Read gas resistance baseline after 5-min warm-up
-- Store baseline to flash with timestamp
-- Restore baseline on boot if < 7 days old
-- Altitude compensation for pressure
-- Humidity calibration if needed
+**Changes shipped**:
+- `src/storage/flash_store.{c,h}`: CRC32-protected record in the last 4 KB flash
+  sector holding the gas baseline, a save timestamp and a save counter. Writes
+  run with interrupts disabled (RP2040 executes in place from flash) and are
+  verified by read-back.
+- `main.c`: on boot the stored baseline seeds the gas ring buffer, so the IAQ
+  running-max is populated and `warming_up` clears from reading #1.
+- Wall-clock is injected over UART (`TIME <unix_seconds>`, sent by the harness).
+  A restored baseline older than 7 days is discarded and re-warmed.
+- Flash writes are rate-limited: only after ≥10 gas samples, only when the
+  baseline moves >10 %, at most once per 30 s — so an unchanged baseline never
+  rewrites the sector (verified: warm reboot kept `boot_count=1`).
 
-**Target Metrics**:
-- iaq_stddev: Reduce significantly
-- temp_drift: Improve (self-heating compensation)
+**Measured (60 s window, stable ambient air)**:
+
+| Metric                    | Cold boot (no record) | Warm boot (restored) |
+|---------------------------|----------------------:|---------------------:|
+| fail_rate                 |                 0.00% |                0.00% |
+| readings with warming_up=1|            16/16 (100%)|            0/14 (0%) |
+| iaq_stddev                |                 0.098 |                0.109 |
+| first_valid_ms (firmware) |                 ~7312 |                ~7325 |
+
+**Notes**: The numeric `iaq_stddev` is unchanged because the ambient gas
+resistance was essentially constant during capture (running-max = live reading
+either way). The real, repeatable win is categorical: the persisted baseline is
+restored on boot (`[BASELINE] fresh (age=160 s); keeping restored baseline`) and
+`warming_up` drops from 100 % of readings to 0 %. `first_valid_ms` is unchanged
+— it is bound by the gas sensor's hardware warm-up, which iter-5 does not target.
+Altitude/humidity calibration deferred (out of scope for the persistence work).
 
 ---
 
