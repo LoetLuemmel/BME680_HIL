@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BME680 Live Dashboard</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --border: #e2e5ea; --text: #1a1d22;
+    --muted: #6b7280; --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+    --shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --panel: #171b22; --border: #262b33; --text: #e6e9ee;
+      --muted: #8b94a3; --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); padding: 24px;
+  }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .dot.off { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 25%, transparent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px;
+  }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; gap: 6px; }
+  .card .value { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .card .value small { font-size: 15px; font-weight: 500; color: var(--muted); }
+  .card .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .spark { width: 100%; height: 34px; margin-top: 2px; }
+  .meta { margin-top: 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .meta .item { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .meta .item .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .meta .item .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+  .disconnected { opacity: .45; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌱 BME680 Live Dashboard</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="statusText">verbinde…</span></span>
+</header>
+
+<div class="grid" id="cards">
+  <div class="card" data-key="temp">
+    <div class="label">🌡️ Temperatur</div>
+    <div class="value"><span class="num">–</span> <small>°C</small></div>
+    <div class="sub">σ <span class="std">–</span> · ⌀ <span class="mean">–</span></div>
+    <svg class="spark" preserveAspectRatio="none" viewBox="0 0 100 34"></svg>
+  </div>
+  <div class="card" data-key="hum">
+    <div class="label">💧 Luftfeuchte</div>
+    <div class="value"><span class="num">–</span> <small>%RH</small></div>
+    <div class="sub">σ <span class="std">–</span> · ⌀ <span class="mean">–</span></div>
+    <svg class="spark" preserveAspectRatio="none" viewBox="0 0 100 34"></svg>
+  </div>
+  <div class="card" data-key="press">
+    <div class="label">🔵 Luftdruck</div>
+    <div class="value"><span class="num">–</span> <small>hPa</small></div>
+    <div class="sub">σ <span class="std">–</span> · ⌀ <span class="mean">–</span></div>
+    <svg class="spark" preserveAspectRatio="none" viewBox="0 0 100 34"></svg>
+  </div>
+  <div class="card" data-key="gas">
+    <div class="label">💨 Gas-Widerstand</div>
+    <div class="value"><span class="num">–</span> <small>kΩ</small></div>
+    <div class="sub">σ <span class="std">–</span> kΩ · ⌀ <span class="mean">–</span></div>
+    <svg class="spark" preserveAspectRatio="none" viewBox="0 0 100 34"></svg>
+  </div>
+  <div class="card" data-key="iaq">
+    <div class="label">🍃 IAQ <span id="iaqBadge"></span></div>
+    <div class="value"><span class="num">–</span> <small>/ 500</small></div>
+    <div class="sub">σ <span class="std">–</span> · ⌀ <span class="mean">–</span></div>
+    <svg class="spark" preserveAspectRatio="none" viewBox="0 0 100 34"></svg>
+  </div>
+</div>
+
+<div class="meta" id="meta"></div>
+
+<footer id="footer">Warte auf Daten…</footer>
+
+<script>
+const CFG = {
+  temp:  { unit: "°C",  dec: 1, scale: 1,      color: "#f97316" },
+  hum:   { unit: "%RH", dec: 1, scale: 1,      color: "#3b82f6" },
+  press: { unit: "hPa", dec: 1, scale: 1,      color: "#8b5cf6" },
+  gas:   { unit: "kΩ",  dec: 1, scale: 1/1000, color: "#10b981" },
+  iaq:   { unit: "",    dec: 1, scale: 1,      color: "#22c55e" },
+};
+
+function fmt(v, dec) { return (v === null || v === undefined || Number.isNaN(v)) ? "–" : v.toFixed(dec); }
+
+function iaqLabel(v) {
+  if (v == null) return ["", ""];
+  if (v <= 50)  return ["gut", "ok"];
+  if (v <= 100) return ["mäßig", "warn"];
+  if (v <= 150) return ["ungesund (empfindl.)", "warn"];
+  if (v <= 200) return ["ungesund", "warn"];
+  return ["sehr schlecht", "warn"];
+}
+
+function drawSpark(svg, values, color) {
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const pts = values.filter(v => v != null);
+  if (pts.length < 2) return;
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const span = (max - min) || 1;
+  const n = pts.length;
+  const d = pts.map((v, i) => {
+    const x = (i / (n - 1)) * 100;
+    const y = 32 - ((v - min) / span) * 30;
+    return (i === 0 ? "M" : "L") + x.toFixed(2) + "," + y.toFixed(2);
+  }).join(" ");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", color);
+  path.setAttribute("stroke-width", "1.6");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+  svg.appendChild(path);
+}
+
+async function tick() {
+  let data;
+  try {
+    const r = await fetch("/api/data", { cache: "no-store" });
+    data = await r.json();
+  } catch (e) {
+    setStatus(false, "Server nicht erreichbar");
+    return;
+  }
+  const conn = data.connected;
+  setStatus(conn, conn ? "verbunden · " + (data.port || "") : "keine Serial-Daten");
+  document.getElementById("cards").classList.toggle("disconnected", !conn);
+
+  const m = data.latest || {};
+  const s = data.summary || {};
+  const hist = data.history || [];
+
+  for (const key of Object.keys(CFG)) {
+    const c = CFG[key];
+    const card = document.querySelector(`.card[data-key="${key}"]`);
+    const raw = m[key];
+    const val = raw == null ? null : raw * c.scale;
+    card.querySelector(".num").textContent = fmt(val, c.dec);
+    const std = s[key + "_stddev"], mean = s[key + "_mean"];
+    card.querySelector(".std").textContent = std == null ? "–" : fmt(std * c.scale, c.dec);
+    card.querySelector(".mean").textContent = mean == null ? "–" : fmt(mean * c.scale, c.dec);
+    drawSpark(card.querySelector(".spark"), hist.map(h => h[key] == null ? null : h[key] * c.scale), c.color);
+  }
+
+  const [lbl, cls] = iaqLabel(m.iaq);
+  const badge = document.getElementById("iaqBadge");
+  badge.textContent = lbl;
+  badge.className = "badge " + cls;
+
+  renderMeta(m, s, data);
+  const uptime = s.uptime_s != null ? Math.floor(s.uptime_s) : null;
+  document.getElementById("footer").textContent =
+    "Firmware-Uptime: " + (uptime != null ? fmtDur(uptime) : "–") +
+    " · Reads: " + (s.reads ?? "–") + " · Aktualisierung alle 2 s";
+}
+
+function renderMeta(m, s, data) {
+  const items = [
+    ["Ausfallrate", s.fail_rate != null ? s.fail_rate.toFixed(2) + " %" : "–"],
+    ["Reads / Fails", (s.reads ?? "–") + " / " + (s.fails ?? "–")],
+    ["Gas gültig", m.gas_valid === 1 ? "ja ✓" : (m.gas_valid === 0 ? "nein" : "–")],
+    ["Warm-up", m.warming_up === 1 ? "läuft…" : (m.warming_up === 0 ? "fertig ✓" : "–")],
+    ["IAQ-Baseline", m.iaq_baseline != null ? Math.round(m.iaq_baseline) + " Ω" : "–"],
+    ["First valid", s.first_valid_ms != null ? Math.round(s.first_valid_ms) + " ms" : "–"],
+  ];
+  document.getElementById("meta").innerHTML = items.map(
+    ([k, v]) => `<div class="item"><div class="k">${k}</div><div class="v">${v}</div></div>`
+  ).join("");
+}
+
+function fmtDur(sec) {
+  const h = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+  if (h) return `${h} h ${mm} min`;
+  if (mm) return `${mm} min ${ss} s`;
+  return `${ss} s`;
+}
+
+function setStatus(ok, text) {
+  const dot = document.getElementById("dot");
+  dot.className = "dot " + (ok ? "on" : "off");
+  document.getElementById("statusText").textContent = text;
+}
+
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
