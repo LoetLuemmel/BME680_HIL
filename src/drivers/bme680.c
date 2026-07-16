@@ -192,23 +192,48 @@ static uint32_t bme680_compensate_gas(bme680_dev_t *dev, uint16_t gas_adc, uint8
     return calc_gas_res;
 }
 
-// Calculate heater resistance for target temperature
+// Calculate the RES_HEAT_x register value for a target heater temperature.
+//
+// This is Bosch's reference integer formula. The previous implementation was
+// broken in two ways that left the heater cold (gas plate never reached target,
+// so gas resistance saturated at a constant): it truncated `par_g2 / 32768` to
+// zero via integer division, and it ignored the heater-calibration coefficients
+// `res_heat_range` / `res_heat_val` entirely. Both are required here.
 static uint8_t bme680_calc_heater_res(bme680_dev_t *dev, uint16_t temp) {
     int32_t var1, var2, var3, var4, var5;
     int32_t heatr_res_x100;
 
-    if (temp > 400) temp = 400;
+    if (temp > 400) temp = 400;  // cap at datasheet maximum
 
-    var1 = (((int32_t)dev->calib.par_g1) / 16) + 49;
-    var2 = ((((int32_t)dev->calib.par_g2) / 32768) * (0x01 << 8)) + 0x00;
-    var3 = ((int32_t)dev->calib.par_g3) << 8;
-    var4 = (var1 * (1 + (var2 * (int32_t)temp) / 100));
-    var5 = (var4 + (var3 * (int32_t)(20) / 100));
+    var1 = (((int32_t)dev->amb_temp * dev->calib.par_g3) / 1000) * 256;
+    var2 = ((int32_t)dev->calib.par_g1 + 784) *
+           (((((int32_t)dev->calib.par_g2 + 154009) * (int32_t)temp * 5) / 100) + 3276800) / 10;
+    var3 = var1 + (var2 / 2);
+    var4 = var3 / ((int32_t)dev->calib.res_heat_range + 4);
+    var5 = (131 * (int32_t)dev->calib.res_heat_val) + 65536;
+    heatr_res_x100 = ((var4 / var5) - 250) * 34;
 
-    heatr_res_x100 = (int32_t)(((3) * (int32_t)(20)) << 14) / var5;
-    uint8_t heatr_res = (uint8_t)((heatr_res_x100 + 50) / 100);
+    return (uint8_t)((heatr_res_x100 + 50) / 100);
+}
 
-    return heatr_res;
+// Encode a heater duration (milliseconds) into the GAS_WAIT_x register format:
+// a 6-bit step count in bits[5:0] with a x1/x4/x16/x64 multiplier in bits[7:6].
+// The previous code wrote `dur/4` as if the field were in 4 ms units, which
+// under-drove the heater (e.g. 150 ms -> 37 ms of actual heating).
+static uint8_t bme680_calc_heater_dur(uint16_t dur_ms) {
+    uint8_t factor = 0;
+    uint8_t durval;
+
+    if (dur_ms >= 0xFC0) {
+        durval = 0xFF;  // clamp at register maximum (~4032 ms)
+    } else {
+        while (dur_ms > 0x3F) {
+            dur_ms /= 4;
+            factor += 1;
+        }
+        durval = (uint8_t)(dur_ms + (factor * 64));
+    }
+    return durval;
 }
 
 // Public API functions
@@ -224,6 +249,7 @@ bme680_error_t bme680_init(bme680_dev_t *dev, i2c_inst_t *i2c_port, uint8_t i2c_
     dev->filter = BME680_FILTER_3;
     dev->heater_temp = 320;  // 320°C for VOC detection
     dev->heater_dur = 150;   // 150ms
+    dev->amb_temp = 25;      // ambient-temp estimate for heater resistance calc
 
     // Soft reset
     bme680_error_t err = bme680_soft_reset(dev);
@@ -284,8 +310,8 @@ bme680_error_t bme680_configure(bme680_dev_t *dev) {
         return BME680_ERR_I2C;
     }
 
-    // Set heater duration (formula: duration_code = duration_ms / 4)
-    uint8_t gas_wait = dev->heater_dur / 4;
+    // Set heater duration (encoded step-count + multiplier)
+    uint8_t gas_wait = bme680_calc_heater_dur(dev->heater_dur);
     if (bme680_write_reg(dev, BME680_REG_GAS_WAIT_0, gas_wait) < 0) {
         return BME680_ERR_I2C;
     }
@@ -340,8 +366,10 @@ bme680_error_t bme680_read_data(bme680_dev_t *dev, bme680_data_t *data) {
     uint16_t gas_adc = (uint16_t)((buf[11] << 2) | (buf[12] >> 6));
     uint8_t gas_range = buf[12] & 0x0F;
 
-    // Check gas measurement validity
-    data->gas_valid = (buf[12] & 0x30) != 0;  // gas_valid_r and heater_stab_r bits
+    // Check gas measurement validity: require BOTH gas_valid_r (bit 5) and
+    // heat_stab_r (bit 4). The old `!= 0` accepted a reading even when the
+    // heater never stabilised, masking a cold-plate / saturated-gas fault.
+    data->gas_valid = (buf[12] & 0x30) == 0x30;
 
     // Compensate measurements
     data->temperature = bme680_compensate_temperature(dev, temp_adc);

@@ -1,9 +1,15 @@
 /**
  * @file main.c
- * @brief BME680 Environmental Sensor - Iteration 1: Naive Driver
+ * @brief BME680 Environmental Sensor - Iteration 5: Persistent baseline
  *
- * This is the baseline implementation with minimal error handling.
- * Outputs structured metrics for automated testing.
+ * Builds on iter-4's IAQ index by persisting the gas-resistance baseline to
+ * the Pico's on-board flash. On boot the stored baseline is restored (if it
+ * passes a 7-day freshness check) so the IAQ index is stable from the first
+ * valid reading instead of re-warming from scratch every power cycle.
+ *
+ * Wall-clock time (needed for the freshness check) is injected over UART: the
+ * test harness sends a "TIME <unix_seconds>" line, which the firmware reads on
+ * stdin. Without it the firmware still restores the baseline but cannot age it.
  *
  * Hardware:
  * - Raspberry Pi Pico (RP2040)
@@ -15,11 +21,14 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
 #include "bme680.h"
+#include "flash_store.h"
 
 // I2C Configuration
 #define I2C_PORT        i2c0
@@ -43,6 +52,21 @@
 
 // Optimal humidity for IAQ scoring (centred on 40 %RH).
 #define IAQ_HUM_OPTIMAL         40.0f
+
+// --- Iteration 5: persistent baseline ---
+// A restored baseline older than this is discarded and re-warmed.
+#define BASELINE_MAX_AGE_S          (7u * 24u * 3600u)   // 7 days
+// Reject an implausibly high stored baseline. The BME680 gas channel tops out
+// around ~2 MΩ in clean air; anything far above that is a saturated/frozen
+// reading (e.g. from the pre-heater-fix firmware), not a real baseline. This
+// self-heals a poisoned record: the firmware cold-starts and re-learns instead.
+#define BASELINE_MAX_PLAUSIBLE_OHMS 2000000u
+// Minimum gas samples before the running-max baseline is worth persisting.
+#define BASELINE_MIN_SAMPLES        10u
+// Don't rewrite flash if the baseline moved by less than this fraction (1/10).
+#define BASELINE_CHANGE_DIV         10u
+// Rate-limit flash writes so a busy loop can't thrash the sector.
+#define BASELINE_SAVE_INTERVAL_MS   30000u
 
 // Statistics tracking
 typedef struct {
@@ -83,6 +107,162 @@ static uint32_t gas_baseline_max(void) {
         if (gas_history[i] > max) max = gas_history[i];
     }
     return max;
+}
+
+// --- Iteration 5: persistent baseline + injected wall-clock ---
+
+// Baseline restored from / persisted to flash.
+static uint32_t persisted_baseline = 0;     // 0 = nothing persisted yet
+static bool     baseline_from_flash = false;
+static uint32_t stored_saved_epoch = 0;     // saved_epoch of the restored record
+static uint32_t stored_boot_count = 0;
+static uint32_t last_save_ms = 0;
+static bool     restored_at_boot = false;   // baseline came from flash at boot
+static bool     freshness_checked = false;
+
+// Wall-clock injected over UART as "TIME <unix_seconds>". We hold the epoch and
+// the boot-relative timestamp it arrived at, then extrapolate with uptime.
+static uint32_t wallclock_epoch_ref = 0;
+static uint32_t wallclock_boot_ms = 0;
+static bool     wallclock_known = false;
+
+// Current unix time, or 0 if no TIME line has been received yet.
+static uint32_t wallclock_now(void) {
+    if (!wallclock_known) return 0;
+    uint32_t up = to_ms_since_boot(get_absolute_time());
+    return wallclock_epoch_ref + (up - wallclock_boot_ms) / 1000u;
+}
+
+// Non-blocking: drain UART stdin and act on any complete "TIME <epoch>" line.
+static void poll_time_injection(void) {
+    static char buf[32];
+    static uint32_t len = 0;
+    int c;
+    while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+        if (c == '\n' || c == '\r') {
+            buf[len] = '\0';
+            if (len > 5 && strncmp(buf, "TIME ", 5) == 0) {
+                uint32_t epoch = (uint32_t)strtoul(buf + 5, NULL, 10);
+                if (epoch > 0) {
+                    wallclock_epoch_ref = epoch;
+                    wallclock_boot_ms = to_ms_since_boot(get_absolute_time());
+                    wallclock_known = true;
+                    printf("[INFO] wall-clock set: epoch=%lu\n", (unsigned long)epoch);
+                }
+            }
+            len = 0;
+        } else if (len < sizeof(buf) - 1) {
+            buf[len++] = (char)c;
+        } else {
+            len = 0;  // overrun: drop the partial line
+        }
+    }
+}
+
+// Restore the persisted baseline at boot: seed the ring buffer so the running
+// max returns the stored value and warming_up clears immediately.
+static void seed_baseline_from_flash(void) {
+    flash_store_t rec;
+    if (!flash_store_load(&rec)) {
+        printf("[BASELINE] no valid record in flash; cold start\n");
+        return;
+    }
+    if (rec.gas_baseline == 0) {
+        printf("[BASELINE] stored baseline is zero; ignoring\n");
+        return;
+    }
+    if (rec.gas_baseline > BASELINE_MAX_PLAUSIBLE_OHMS) {
+        printf("[BASELINE] stored baseline %lu ohms implausible (>%lu); "
+               "discarding, cold start\n",
+               (unsigned long)rec.gas_baseline,
+               (unsigned long)BASELINE_MAX_PLAUSIBLE_OHMS);
+        return;
+    }
+
+    persisted_baseline = rec.gas_baseline;
+    baseline_from_flash = true;
+    restored_at_boot = true;
+    stored_saved_epoch = rec.saved_epoch;
+    stored_boot_count = rec.boot_count;
+
+    for (uint32_t i = 0; i < IAQ_WINDOW_SIZE; i++) gas_history[i] = persisted_baseline;
+    gas_history_count = IAQ_WINDOW_SIZE;
+    gas_history_idx = 0;
+
+    printf("[BASELINE] restored from flash: gas=%lu ohms saved_epoch=%lu boot_count=%lu\n",
+           (unsigned long)rec.gas_baseline,
+           (unsigned long)rec.saved_epoch,
+           (unsigned long)rec.boot_count);
+}
+
+// Once wall-clock time is known, discard the restored baseline if it is stale.
+// Runs at most once (freshness_checked latches).
+static void maybe_invalidate_stale_baseline(void) {
+    if (freshness_checked || !restored_at_boot || !wallclock_known) return;
+    freshness_checked = true;
+
+    if (stored_saved_epoch == 0) {
+        printf("[BASELINE] restored baseline has no timestamp; keeping (age unknown)\n");
+        return;
+    }
+    uint32_t now = wallclock_now();
+    if (now < stored_saved_epoch) {
+        printf("[BASELINE] clock precedes saved time; keeping restored baseline\n");
+        return;
+    }
+    uint32_t age = now - stored_saved_epoch;
+    if (age > BASELINE_MAX_AGE_S) {
+        printf("[BASELINE] stale (age=%lu s > %lu s); discarding, re-warming\n",
+               (unsigned long)age, (unsigned long)BASELINE_MAX_AGE_S);
+        for (uint32_t i = 0; i < IAQ_WINDOW_SIZE; i++) gas_history[i] = 0;
+        gas_history_count = 0;
+        gas_history_idx = 0;
+        baseline_from_flash = false;
+        restored_at_boot = false;
+        persisted_baseline = 0;
+    } else {
+        printf("[BASELINE] fresh (age=%lu s); keeping restored baseline\n",
+               (unsigned long)age);
+    }
+}
+
+// Persist the current running-max baseline when it is meaningful and has moved.
+static void maybe_save_baseline(uint32_t current_baseline) {
+    if (current_baseline == 0) return;
+    if (gas_history_count < BASELINE_MIN_SAMPLES) return;  // not enough evidence yet
+
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (last_save_ms != 0 && (now_ms - last_save_ms) < BASELINE_SAVE_INTERVAL_MS) return;
+
+    // Only rewrite when nothing is stored yet or the baseline moved > 10 %.
+    bool worth = !baseline_from_flash;
+    if (persisted_baseline > 0) {
+        uint32_t delta = persisted_baseline / BASELINE_CHANGE_DIV;
+        if (current_baseline > persisted_baseline + delta ||
+            current_baseline < persisted_baseline - delta) {
+            worth = true;
+        }
+    }
+    if (!worth) return;
+
+    flash_store_t rec = {0};
+    rec.gas_baseline = current_baseline;
+    rec.saved_epoch = wallclock_now();       // 0 if wall-clock still unknown
+    rec.boot_count = stored_boot_count + 1;
+
+    if (flash_store_save(&rec)) {
+        persisted_baseline = current_baseline;
+        baseline_from_flash = true;
+        stored_saved_epoch = rec.saved_epoch;
+        stored_boot_count = rec.boot_count;
+        last_save_ms = now_ms;
+        printf("[BASELINE] saved to flash: gas=%lu ohms epoch=%lu boot_count=%lu\n",
+               (unsigned long)current_baseline,
+               (unsigned long)rec.saved_epoch,
+               (unsigned long)rec.boot_count);
+    } else {
+        printf("[BASELINE] flash save FAILED (verify mismatch)\n");
+    }
 }
 
 // IAQ score: 0 (excellent) to 500 (hazardous).
@@ -198,9 +378,9 @@ int main(void) {
 
     printf("\n");
     printf("========================================\n");
-    printf("BME680 Environmental Sensor - Iteration 1\n");
+    printf("BME680 Environmental Sensor - Iteration 5\n");
     printf("========================================\n");
-    printf("[INFO] Naive driver - baseline implementation\n");
+    printf("[INFO] Persistent gas baseline (flash-backed IAQ)\n");
     printf("[INFO] I2C: GP%d (SDA), GP%d (SCL), %d Hz\n", I2C_SDA_PIN, I2C_SCL_PIN, I2C_FREQ_HZ);
     printf("[INFO] BME680 address: 0x%02X\n", BME680_ADDR);
     printf("\n");
@@ -225,6 +405,11 @@ int main(void) {
     printf("[INFO] BME680 initialized successfully!\n");
     printf("[INFO] Heater: %d°C, %d ms\n", sensor.heater_temp, sensor.heater_dur);
     printf("[INFO] Measurement interval: %d ms\n", MEASURE_INTERVAL_MS);
+
+    // Restore the persisted gas baseline before the first measurement so IAQ is
+    // meaningful from reading #1. Freshness is validated once wall-clock arrives.
+    seed_baseline_from_flash();
+
     printf("\n");
     printf("Starting measurements...\n");
     printf("\n");
@@ -235,6 +420,10 @@ int main(void) {
 
     while (true) {
         absolute_time_t now = get_absolute_time();
+
+        // Accept an injected wall-clock and, once known, age-check the baseline.
+        poll_time_injection();
+        maybe_invalidate_stale_baseline();
 
         // Trigger measurement every MEASURE_INTERVAL_MS
         if (absolute_time_diff_us(last_measurement, now) >= MEASURE_INTERVAL_MS * 1000) {
@@ -300,6 +489,9 @@ int main(void) {
                 stats.iaq_sum += iaq;
                 stats.iaq_sq_sum += iaq * iaq;
                 stats.iaq_count++;
+
+                // Persist the baseline so the next boot starts warm.
+                maybe_save_baseline(baseline);
             }
 
             // Print metric line

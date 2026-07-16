@@ -1,0 +1,20 @@
+{
+  "iteration": 5,
+  "timestamp": "2026-07-14T17:56:53.053379",
+  "metrics": {
+    "reads": 14,
+    "fails": 0,
+    "fail_rate": 0.0,
+    "temp_mean": 27.0,
+    "temp_stddev": 0.0,
+    "hum_mean": 53.42142857142857,
+    "hum_stddev": 0.05789342235218477,
+    "press_mean": 962.0,
+    "press_stddev": 0.0,
+    "gas_mean": 12917167.0,
+    "gas_stddev": 0.0,
+    "iaq_mean": 27.942857142857143,
+    "iaq_stddev": 0.10894095588038455,
+    "first_valid_ms": 7325
+  }
+}

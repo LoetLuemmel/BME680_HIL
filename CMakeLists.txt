@@ -15,12 +15,14 @@ pico_sdk_init()
 add_executable(bme680_hil
     main.c
     src/drivers/bme680.c
+    src/storage/flash_store.c
 )
 
 # Include directories
 target_include_directories(bme680_hil PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/storage
 )
 
 # Link libraries
