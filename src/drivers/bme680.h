@@ -140,6 +140,7 @@ typedef struct {
     bme680_filter_t filter;
     uint16_t heater_temp;  // Target heater temp in °C (200-400)
     uint16_t heater_dur;   // Heater duration in ms (1-4032)
+    int8_t   amb_temp;     // Ambient-temp estimate (°C) for heater resistance calc
     bme680_calib_t calib;
 } bme680_dev_t;
 
