@@ -360,8 +360,8 @@ static void print_summary(void) {
     uint32_t uptime_s = to_ms_since_boot(get_absolute_time()) / 1000;
 
     printf("[SUMMARY] reads=%lu fails=%lu fail_rate=%.2f "
-           "temp_mean=%.1f temp_stddev=%.1f hum_mean=%.1f hum_stddev=%.1f "
-           "press_mean=%.0f press_stddev=%.1f gas_mean=%.0f gas_stddev=%.0f "
+           "temp_mean=%.2f temp_stddev=%.2f hum_mean=%.2f hum_stddev=%.2f "
+           "press_mean=%.2f press_stddev=%.2f gas_mean=%.0f gas_stddev=%.0f "
            "iaq_mean=%.1f iaq_stddev=%.1f "
            "first_valid_ms=%lu uptime_s=%lu\n",
            stats.total_reads, stats.total_fails, fail_rate,
@@ -495,7 +495,7 @@ int main(void) {
             }
 
             // Print metric line
-            printf("[METRIC] read_ok=1 temp=%.1f hum=%.1f press=%.0f gas=%lu "
+            printf("[METRIC] read_ok=1 temp=%.2f hum=%.2f press=%.2f gas=%lu "
                    "gas_valid=%d iaq=%.1f iaq_baseline=%lu warming_up=%d ts_ms=%lu\n",
                    data.temperature, data.humidity, data.pressure,
                    data.gas_resistance, data.gas_valid,
