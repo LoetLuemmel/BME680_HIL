@@ -411,6 +411,14 @@ int main(void) {
 
     printf("[INFO] BME680 initialized successfully!\n");
     printf("[INFO] Heater: %d°C, %d ms\n", sensor.heater_temp, sensor.heater_dur);
+    if (sensor.heater_ok) {
+        printf("[INFO] Heater setpoint check OK: RES_HEAT_0=%u, reference %u\n",
+               sensor.heater_res, sensor.heater_res_ref);
+    } else {
+        printf("[ERROR] Heater setpoint implausible: RES_HEAT_0=%u, reference %u "
+               "(tolerance %d) - gas measurement disabled\n",
+               sensor.heater_res, sensor.heater_res_ref, BME680_HEATER_RES_TOLERANCE);
+    }
     printf("[INFO] Measurement interval: %d ms\n", MEASURE_INTERVAL_MS);
 
     // Restore the persisted gas baseline before the first measurement so IAQ is

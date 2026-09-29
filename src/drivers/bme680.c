@@ -223,6 +223,24 @@ static uint8_t bme680_calc_heater_res(bme680_dev_t *dev, uint16_t temp) {
     return (uint8_t)((heatr_res_x100 + 50) / 100);
 }
 
+// Bosch's floating-point variant of the same calculation (BME68x SensorAPI).
+// Used only as an independent reference at start-up: a wrong heater setpoint
+// is silent - the sensor still reports valid-looking gas readings - so the
+// integer result is checked against this before the heater is switched on.
+static uint8_t bme680_calc_heater_res_ref(bme680_dev_t *dev, uint16_t temp) {
+    if (temp > 400) temp = 400;
+    float var1 = ((float)dev->calib.par_g1 / 16.0f) + 49.0f;
+    float var2 = (((float)dev->calib.par_g2 / 32768.0f) * 0.0005f) + 0.00235f;
+    float var3 = (float)dev->calib.par_g3 / 1024.0f;
+    float var4 = var1 * (1.0f + (var2 * (float)temp));
+    float var5 = var4 + (var3 * (float)dev->amb_temp);
+    float res = 3.4f * ((var5 * (4.0f / (4.0f + (float)dev->calib.res_heat_range)) *
+                         (1.0f / (1.0f + ((float)dev->calib.res_heat_val * 0.002f)))) - 25.0f);
+    if (res < 0.0f) res = 0.0f;
+    if (res > 255.0f) res = 255.0f;
+    return (uint8_t)res;
+}
+
 // Encode a heater duration (milliseconds) into the GAS_WAIT_x register format:
 // a 6-bit step count in bits[5:0] with a x1/x4/x16/x64 multiplier in bits[7:6].
 // The previous code wrote `dur/4` as if the field were in 4 ms units, which
@@ -311,9 +329,18 @@ bme680_error_t bme680_configure(bme680_dev_t *dev) {
         return BME680_ERR_I2C;
     }
 
-    // Configure gas sensor heater
+    // Configure gas sensor heater - but only after the self-check: compare the
+    // integer setpoint with Bosch's float formula. On disagreement the heater
+    // register is not written and run_gas stays 0 below, so a miscalculated
+    // setpoint can never drive the plate; T/p/h measurements continue.
     uint8_t heater_res = bme680_calc_heater_res(dev, dev->heater_temp);
-    if (bme680_write_reg(dev, BME680_REG_RES_HEAT_0, heater_res) < 0) {
+    dev->heater_res = heater_res;
+    dev->heater_res_ref = bme680_calc_heater_res_ref(dev, dev->heater_temp);
+    int heater_diff = (int)heater_res - (int)dev->heater_res_ref;
+    dev->heater_ok = (heater_diff >= -BME680_HEATER_RES_TOLERANCE &&
+                      heater_diff <= BME680_HEATER_RES_TOLERANCE);
+    if (dev->heater_ok &&
+        bme680_write_reg(dev, BME680_REG_RES_HEAT_0, heater_res) < 0) {
         return BME680_ERR_I2C;
     }
 
@@ -323,8 +350,9 @@ bme680_error_t bme680_configure(bme680_dev_t *dev) {
         return BME680_ERR_I2C;
     }
 
-    // Enable gas measurements (nb_conv=0 for heater setpoint 0)
-    uint8_t gas_ctrl = 0x10;  // run_gas = 1, nb_conv = 0
+    // Enable gas measurements (nb_conv=0 for heater setpoint 0) - only with a
+    // plausible heater setpoint; otherwise run_gas = 0 and gas_valid stays 0.
+    uint8_t gas_ctrl = dev->heater_ok ? 0x10 : 0x00;  // run_gas, nb_conv = 0
     if (bme680_write_reg(dev, BME680_REG_CTRL_GAS_1, gas_ctrl) < 0) {
         return BME680_ERR_I2C;
     }
