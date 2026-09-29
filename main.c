@@ -25,10 +25,12 @@
 #include <string.h>
 #include <math.h>
 #include "pico/stdlib.h"
+#include "pico/binary_info.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
 #include "bme680.h"
 #include "flash_store.h"
+#include "fw_version.h"
 
 // I2C Configuration
 #define I2C_PORT        i2c0
@@ -371,6 +373,9 @@ static void print_summary(void) {
            stats.first_valid_ms, uptime_s);
 }
 
+// Readable over PICOBOOT with `picotool info` - no serial console needed.
+bi_decl(bi_program_version_string(FW_VERSION));
+
 int main(void) {
     // Initialize stdio for UART output
     stdio_init_all();
@@ -379,6 +384,7 @@ int main(void) {
     printf("\n");
     printf("========================================\n");
     printf("BME680 Environmental Sensor - Iteration 5\n");
+    printf("[INFO] Firmware version: %s\n", FW_VERSION);
     printf("========================================\n");
     printf("[INFO] Persistent gas baseline (flash-backed IAQ)\n");
     printf("[INFO] I2C: GP%d (SDA), GP%d (SCL), %d Hz\n", I2C_SDA_PIN, I2C_SCL_PIN, I2C_FREQ_HZ);
