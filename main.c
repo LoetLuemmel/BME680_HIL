@@ -68,21 +68,26 @@
 // Rate-limit flash writes so a busy loop can't thrash the sector.
 #define BASELINE_SAVE_INTERVAL_MS   30000u
 
+// Running mean/variance (Welford). The former float sum / sum-of-squares
+// cancelled catastrophically: after ~25k readings press_sq_sum is ~2.3e10,
+// where a float step is 2048, so a real variance of ~0.2 hPa^2 vanished and
+// press_stddev printed 0.00. Welford only accumulates deviations from the
+// running mean, in double - soft-float on the RP2040, negligible at 0.2 Hz.
+typedef struct {
+    uint32_t n;
+    double mean;
+    double m2;   // sum of squared deviations from the running mean
+} running_stat_t;
+
 // Statistics tracking
 typedef struct {
     uint32_t total_reads;
     uint32_t total_fails;
-    float temp_sum;
-    float temp_sq_sum;
-    float hum_sum;
-    float hum_sq_sum;
-    float press_sum;
-    float press_sq_sum;
-    uint64_t gas_sum;
-    uint64_t gas_sq_sum;
-    float iaq_sum;
-    float iaq_sq_sum;
-    uint32_t iaq_count;
+    running_stat_t temp;
+    running_stat_t hum;
+    running_stat_t press;
+    running_stat_t gas;
+    running_stat_t iaq;
     uint32_t first_valid_ms;
     bool first_valid_recorded;
 } stats_t;
@@ -313,13 +318,24 @@ static void init_led(void) {
 }
 
 /**
- * @brief Calculate standard deviation
+ * @brief Add one sample to a running statistic (Welford's algorithm)
  */
-static float calculate_stddev(float sum, float sq_sum, uint32_t count) {
-    if (count < 2) return 0.0f;
-    float mean = sum / count;
-    float variance = (sq_sum / count) - (mean * mean);
-    return (variance > 0) ? sqrtf(variance) : 0.0f;
+static void running_add(running_stat_t *r, double x) {
+    r->n++;
+    double delta = x - r->mean;
+    r->mean += delta / r->n;
+    r->m2 += delta * (x - r->mean);
+}
+
+static float running_mean(const running_stat_t *r) {
+    return (r->n > 0) ? (float)r->mean : 0.0f;
+}
+
+/**
+ * @brief Population standard deviation, same definition as before
+ */
+static float running_stddev(const running_stat_t *r) {
+    return (r->n > 1) ? (float)sqrt(r->m2 / r->n) : 0.0f;
 }
 
 /**
@@ -331,31 +347,16 @@ static void print_summary(void) {
         fail_rate = (float)stats.total_fails / (stats.total_reads + stats.total_fails) * 100.0f;
     }
 
-    float temp_mean = (stats.total_reads > 0) ? stats.temp_sum / stats.total_reads : 0.0f;
-    float temp_stddev = calculate_stddev(stats.temp_sum, stats.temp_sq_sum, stats.total_reads);
-
-    float hum_mean = (stats.total_reads > 0) ? stats.hum_sum / stats.total_reads : 0.0f;
-    float hum_stddev = calculate_stddev(stats.hum_sum, stats.hum_sq_sum, stats.total_reads);
-
-    float press_mean = (stats.total_reads > 0) ? stats.press_sum / stats.total_reads : 0.0f;
-    float press_stddev = calculate_stddev(stats.press_sum, stats.press_sq_sum, stats.total_reads);
-
-    float gas_mean = (stats.total_reads > 0) ? (float)stats.gas_sum / stats.total_reads : 0.0f;
-    // For gas stddev, need to handle large numbers carefully
-    float gas_variance = 0.0f;
-    if (stats.total_reads > 1) {
-        float gas_mean_sq = gas_mean * gas_mean;
-        float gas_sq_mean = (float)stats.gas_sq_sum / stats.total_reads;
-        gas_variance = gas_sq_mean - gas_mean_sq;
-    }
-    float gas_stddev = (gas_variance > 0) ? sqrtf(gas_variance) : 0.0f;
-
-    float iaq_mean = (stats.iaq_count > 0) ? stats.iaq_sum / stats.iaq_count : 0.0f;
-    float iaq_stddev = 0.0f;
-    if (stats.iaq_count > 1) {
-        float iaq_variance = (stats.iaq_sq_sum / stats.iaq_count) - (iaq_mean * iaq_mean);
-        iaq_stddev = (iaq_variance > 0.0f) ? sqrtf(iaq_variance) : 0.0f;
-    }
+    float temp_mean = running_mean(&stats.temp);
+    float temp_stddev = running_stddev(&stats.temp);
+    float hum_mean = running_mean(&stats.hum);
+    float hum_stddev = running_stddev(&stats.hum);
+    float press_mean = running_mean(&stats.press);
+    float press_stddev = running_stddev(&stats.press);
+    float gas_mean = running_mean(&stats.gas);
+    float gas_stddev = running_stddev(&stats.gas);
+    float iaq_mean = running_mean(&stats.iaq);
+    float iaq_stddev = running_stddev(&stats.iaq);
 
     uint32_t uptime_s = to_ms_since_boot(get_absolute_time()) / 1000;
 
@@ -468,14 +469,10 @@ int main(void) {
 
             // Update statistics
             stats.total_reads++;
-            stats.temp_sum += data.temperature;
-            stats.temp_sq_sum += data.temperature * data.temperature;
-            stats.hum_sum += data.humidity;
-            stats.hum_sq_sum += data.humidity * data.humidity;
-            stats.press_sum += data.pressure;
-            stats.press_sq_sum += data.pressure * data.pressure;
-            stats.gas_sum += data.gas_resistance;
-            stats.gas_sq_sum += (uint64_t)data.gas_resistance * data.gas_resistance;
+            running_add(&stats.temp, data.temperature);
+            running_add(&stats.hum, data.humidity);
+            running_add(&stats.press, data.pressure);
+            running_add(&stats.gas, data.gas_resistance);
 
             // Derive IAQ from gas baseline + humidity
             float iaq = 0.0f;
@@ -486,9 +483,7 @@ int main(void) {
                 baseline = gas_baseline_max();
                 iaq = compute_iaq(data.gas_resistance, baseline, data.humidity);
                 warming_up = (gas_history_count < IAQ_WINDOW_SIZE);
-                stats.iaq_sum += iaq;
-                stats.iaq_sq_sum += iaq * iaq;
-                stats.iaq_count++;
+                running_add(&stats.iaq, iaq);
 
                 // Persist the baseline so the next boot starts warm.
                 maybe_save_baseline(baseline);
