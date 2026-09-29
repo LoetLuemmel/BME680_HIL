@@ -206,8 +206,15 @@ static uint8_t bme680_calc_heater_res(bme680_dev_t *dev, uint16_t temp) {
     if (temp > 400) temp = 400;  // cap at datasheet maximum
 
     var1 = (((int32_t)dev->amb_temp * dev->calib.par_g3) / 1000) * 256;
+    // Divide by 10 BEFORE multiplying, exactly as in Bosch's reference. The
+    // other order overflows int32_t: with par_g1 = -24, par_g2 = -3763 and
+    // 320 degC the product is 4.3e9. Signed overflow is undefined - a Debug
+    // build happened to wrap to res_heat 173 (~490 degC, above the 400 degC
+    // datasheet limit), a Release build left the heater cold (gas frozen).
+    // In this order the worst case over all int8/int16 coefficients at
+    // 400 degC is ~6.4e8, well inside int32_t.
     var2 = ((int32_t)dev->calib.par_g1 + 784) *
-           (((((int32_t)dev->calib.par_g2 + 154009) * (int32_t)temp * 5) / 100) + 3276800) / 10;
+           ((((((int32_t)dev->calib.par_g2 + 154009) * (int32_t)temp * 5) / 100) + 3276800) / 10);
     var3 = var1 + (var2 / 2);
     var4 = var3 / ((int32_t)dev->calib.res_heat_range + 4);
     var5 = (131 * (int32_t)dev->calib.res_heat_val) + 65536;
