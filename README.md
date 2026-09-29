@@ -103,8 +103,8 @@ Each iteration is a separate git branch and pull request with before/after metri
 The firmware outputs structured metrics for automated parsing:
 
 ```
-[METRIC] read_ok=1 temp=23.4 hum=45.2 press=1013 gas=125000 gas_valid=1 ts_ms=12345
-[SUMMARY] reads=120 fails=0 fail_rate=0.00 temp_mean=23.5 temp_stddev=0.3 ...
+[METRIC] read_ok=1 temp=23.41 hum=45.23 press=1013.27 gas=125000 gas_valid=1 ts_ms=12345
+[SUMMARY] reads=120 fails=0 fail_rate=0.00 temp_mean=23.52 temp_stddev=0.31 ...
 ```
 
 ## Test Stimulus

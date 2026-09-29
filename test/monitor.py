@@ -51,9 +51,9 @@ def frame(port, reads, fails, m):
     title = "  BME680 — live"
     lines.append("│" + title.ljust(W) + "│")
     lines.append(_rule())
-    lines.append(_row("Temperature", f"{temp:.1f}", "degC"))
-    lines.append(_row("Humidity", f"{hum:.1f}", "%RH"))
-    lines.append(_row("Pressure", f"{press:.0f}", "hPa"))
+    lines.append(_row("Temperature", f"{temp:.2f}", "degC"))
+    lines.append(_row("Humidity", f"{hum:.2f}", "%RH"))
+    lines.append(_row("Pressure", f"{press:.2f}", "hPa"))
     lines.append(_row("Gas resist.", f"{gas/1e6:.3f}", "MOhm"))
     lines.append(_row("IAQ index", f"{iaq:.1f}", iaq_label(iaq)))
     lines.append(_rule())

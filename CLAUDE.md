@@ -105,9 +105,9 @@ The harness is the backbone of the automated loop. It:
 Every firmware iteration **must** print metrics in this parseable format on UART0:
 
 ```
-[METRIC] read_ok=1 temp=23.4 hum=45.2 press=1013 gas=125000 iaq=50 ts_ms=12345
+[METRIC] read_ok=1 temp=23.41 hum=45.23 press=1013.27 gas=125000 iaq=50 ts_ms=12345
 [METRIC] read_fail=1 err=I2C_TIMEOUT ts_ms=12400
-[SUMMARY] reads=120 fails=3 fail_rate=2.50 temp_mean=23.5 temp_stddev=0.3 hum_mean=45.0 hum_stddev=2.1 press_mean=1013 press_stddev=0.5 gas_mean=120000 gas_stddev=15000 iaq_mean=52 iaq_stddev=8 uptime_s=60
+[SUMMARY] reads=120 fails=3 fail_rate=2.50 temp_mean=23.52 temp_stddev=0.31 hum_mean=45.04 hum_stddev=2.10 press_mean=1013.27 press_stddev=0.48 gas_mean=120000 gas_stddev=15000 iaq_mean=52 iaq_stddev=8 uptime_s=60
 ```
 
 - `[METRIC]` lines: one per read attempt (success or failure)
