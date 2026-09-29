@@ -38,6 +38,16 @@ target_link_libraries(bme680_hil
 pico_enable_stdio_uart(bme680_hil 1)
 pico_enable_stdio_usb(bme680_hil 0)
 
+# Firmware version = git commit. Shown by `picotool info` (binary info) and in
+# the boot banner, so the running build can be identified without guesswork.
+add_custom_target(fw_version
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/fw_version.h
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/fw_version.cmake
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/fw_version.h)
+add_dependencies(bme680_hil fw_version)
+target_include_directories(bme680_hil PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 # Create map/bin/hex/uf2 files
 pico_add_extra_outputs(bme680_hil)
 
