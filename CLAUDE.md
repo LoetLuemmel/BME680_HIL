@@ -50,19 +50,26 @@ Each iteration produces a PR whose description contains before/after metrics pro
 bme680-hil/
 ├── CLAUDE.md              ← you are here
 ├── CMakeLists.txt         ← top-level CMake (Pico SDK project)
+├── main.c                 ← entry point, sensor init, main loop, statistics
+├── monitor.py             ← early serial monitor from iteration 1 (test/monitor.py is current)
+├── cmake/
+│   └── fw_version.cmake   ← writes fw_version.h (git describe) on every build
 ├── src/
-│   ├── main.c             ← entry point, sensor init, main loop
 │   ├── drivers/
 │   │   ├── bme680.h       ← driver header
 │   │   └── bme680.c       ← driver implementation (evolves each iteration)
+│   └── storage/
+│       ├── flash_store.h  ← persistent gas baseline (last flash sector)
+│       └── flash_store.c
+├── tools/
+│   ├── i2c_scan.c         ← diagnostic: I2C address scanner
+│   └── calib_dump.c       ← diagnostic: dump calibration registers
 ├── test/
 │   ├── harness.py         ← Python script: flash → capture serial → parse metrics
+│   ├── monitor.py         ← live console monitor
 │   └── metrics_log/       ← per-iteration JSON metric snapshots
-├── docs/
-│   └── iterations.md      ← human-readable log of what changed and why
-└── .github/
-    └── workflows/
-        └── claude.yml     ← GitHub Actions workflow for @claude mentions
+└── docs/
+    └── iterations.md      ← human-readable log of what changed and why
 ```
 
 ---
@@ -77,14 +84,28 @@ cmake -DPICO_SDK_PATH=$PICO_SDK_PATH ..
 # Build
 cd build && make -j$(nproc)
 
-# Flash via debug probe (OpenOCD)
+# Flash via debug probe (OpenOCD, SWD - no BOOTSEL needed; the baseline
+# sector at the end of flash is not erased)
 openocd -f interface/cmsis-dap.cfg -f target/rp2040.cfg \
   -c "adapter speed 5000" \
-  -c "program bme680-hil.elf verify reset exit"
+  -c "program bme680_hil.elf verify reset exit"
 
-# Alternatively, flash via picotool over SWD
-picotool load -f bme680-hil.uf2
+# Alternatively, flash via picotool over USB (PICOBOOT - needs BOOTSEL)
+picotool load -f bme680_hil.uf2
+
+# Which build is this? The git commit is embedded as program version
+picotool info -a bme680_hil.uf2        # -> version: <commit>[-dirty]
 ```
+
+The boot banner prints the same version on UART
+(`[INFO] Firmware version: <commit>`).
+
+**Release and Debug builds must both work.** The SDK builds Release by
+default. Before `835a097` the heater-resistance formula overflowed `int32_t`
+(undefined behaviour): Release builds left the gas channel frozen, Debug
+builds overheated the plate to ~490 °C. Never "fix" a sensor problem by
+switching the build type - check for undefined behaviour instead, e.g. by
+compiling the arithmetic on the host with `-fsanitize=undefined`.
 
 ---
 
