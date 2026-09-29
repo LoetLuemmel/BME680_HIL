@@ -142,7 +142,18 @@ typedef struct {
     uint16_t heater_dur;   // Heater duration in ms (1-4032)
     int8_t   amb_temp;     // Ambient-temp estimate (°C) for heater resistance calc
     bme680_calib_t calib;
+    // Heater self-check, filled by bme680_configure(): the integer RES_HEAT_0
+    // value that was computed, Bosch's independent float formula as reference,
+    // and whether they agree. If not, the gas channel is left disabled.
+    uint8_t  heater_res;
+    uint8_t  heater_res_ref;
+    bool     heater_ok;
 } bme680_dev_t;
+
+// Largest accepted |integer - float| RES_HEAT_0 difference (register steps,
+// ~2.5 degC each). Across realistic coefficients the two Bosch formulas differ
+// by at most 6; the int32 overflow fixed in 835a097 differed by 48.
+#define BME680_HEATER_RES_TOLERANCE 10
 
 // Measurement data
 typedef struct {
